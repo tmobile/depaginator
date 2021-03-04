@@ -1,0 +1,3 @@
+max_headroom: 2
+min_headroom: 1
+threshold: 99
