@@ -12,6 +12,14 @@
 // implied.  See the License for the specific language governing
 // permissions and limitations under the License.
 
+// Package depaginator contains an implementation of a function,
+// Depaginate, that allows iterating over all items in a paginated
+// API.  The consuming application needs to implement the API and Page
+// interfaces and pass Depaginate a context.Context, the API, and an
+// initial page request, then call Wait on the result; the Depaginator
+// will then take care of the rest, calling the API.GetPage method to
+// retrieve pages of results; the API.HandleItem method to handle the
+// found items; and API.Done when the iteration is complete.
 package depaginator
 
 import (
