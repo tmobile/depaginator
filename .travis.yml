@@ -4,4 +4,4 @@ go:
 - "1.15.x"
 - "1.16.x"
 script:
-- make all goveralls CI=true
+- make all CI=true

@@ -2,8 +2,7 @@
 
 [![Tag](https://img.shields.io/github/tag/tmobile/depaginator.svg)](https://github.com/tmobile/depaginator/tags)
 [![License](https://img.shields.io/hexpm/l/plug.svg)](https://github.com/tmobile/depaginator/blob/main/LICENSE)
-[![Test Report](https://travis-ci.org/tmobile/depaginator.svg?branch=main)](https://travis-ci.org/tmobile/depaginator)
-[![Coverage Report](https://coveralls.io/repos/github/tmobile/depaginator/badge.svg?branch=main)](https://coveralls.io/github/tmobile/depaginator?branch=main)
+[![Test Report](https://travis-ci.com/tmobile/depaginator.svg?branch=main)](https://travis-ci.com/tmobile/depaginator)
 [![Godoc](https://pkg.go.dev/badge/github.com/tmobile/depaginator)](https://pkg.go.dev/github.com/tmobile/depaginator)
 [![Issue Tracker](https://img.shields.io/github/issues/tmobile/depaginator.svg)](https://github.com/tmobile/depaginator/issues)
 [![Pull Request Tracker](https://img.shields.io/github/issues-pr/tmobile/depaginator.svg)](https://github.com/tmobile/depaginator/pulls)
