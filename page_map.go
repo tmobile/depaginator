@@ -30,9 +30,9 @@ type pageMap struct {
 func (pm *pageMap) CheckAndSet(page int) (result bool) {
 	idx, bit := bits.Div(0, uint(page), bits.UintSize)
 	if idx >= uint(len(pm.bits)) {
-		new := make([]uint, idx+1)
-		copy(new, pm.bits)
-		pm.bits = new
+		newMap := make([]uint, idx+1)
+		copy(newMap, pm.bits)
+		pm.bits = newMap
 	} else {
 		result = pm.bits[idx]&(1<<bit) != 0
 	}

@@ -20,24 +20,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 )
-
-type mockPage struct {
-	mock.Mock
-}
-
-func (m *mockPage) Len() int {
-	args := m.MethodCalled("Len")
-
-	return args.Int(0)
-}
-
-func (m *mockPage) Get(idx int) interface{} {
-	args := m.MethodCalled("Get", idx)
-
-	return args.Get(0)
-}
 
 func TestPageMetaSetItemCountBase(t *testing.T) {
 	obj := &PageMeta{}

@@ -16,17 +16,6 @@
 
 package depaginator
 
-// Page contains the items in one page of the paginated response.
-type Page interface {
-	// Len returns the total number of items in the page.
-	Len() int
-
-	// Get retrieves the requested item.  It should return nil if the
-	// requested index is greater than the length of the array, or if
-	// it is negative.
-	Get(idx int) interface{}
-}
-
 // PageRequest describes a request for a specific page.  Most of the
 // page request lives in the Request field, which can be anything
 // needed by the application; the only other field is the PageIndex
@@ -46,9 +35,9 @@ type PageMeta struct {
 	Requests  []PageRequest // Requests for subsequent pages
 }
 
-// SetItemCount sets the total item count in the PageMeta structure.
+// SetItemCount sets the total item count in the [PageMeta] structure.
 // Use this instead of directly setting the value to allow the
-// Depaginator to detect the change.
+// [Depaginator] to detect the change.
 func (pm *PageMeta) SetItemCount(cnt int) {
 	if pm.ItemCount == cnt {
 		return
@@ -56,9 +45,9 @@ func (pm *PageMeta) SetItemCount(cnt int) {
 	pm.ItemCount = cnt
 }
 
-// SetPageCount sets the total page count in the PageMeta structure.
+// SetPageCount sets the total page count in the [PageMeta] structure.
 // Use this instead of directly setting the value to allow the
-// Depaginator to detect the change.
+// [Depaginator] to detect the change.
 func (pm *PageMeta) SetPageCount(cnt int) {
 	if pm.PageCount == cnt {
 		return
@@ -66,9 +55,9 @@ func (pm *PageMeta) SetPageCount(cnt int) {
 	pm.PageCount = cnt
 }
 
-// SetPerPage sets the count of items per page in the PageMeta
+// SetPerPage sets the count of items per page in the [PageMeta]
 // structure.  Use this instead of directly setting the value to allow
-// the Depaginator to detect the change.
+// the [Depaginator] to detect the change.
 func (pm *PageMeta) SetPerPage(cnt int) {
 	if pm.PerPage == cnt {
 		return
@@ -76,13 +65,14 @@ func (pm *PageMeta) SetPerPage(cnt int) {
 	pm.PerPage = cnt
 }
 
-// AddRequest allows adding a page request to the PageMeta structure.
-// Requests can be added directly.  This is a convenience method.
+// AddRequest allows adding a page request to the [PageMeta]
+// structure.  Requests can be added directly.  This is a convenience
+// method.
 func (pm *PageMeta) AddRequest(req PageRequest) {
 	pm.Requests = append(pm.Requests, req)
 }
 
-// update updates a PageMeta from another PageMeta.
+// update updates a [PageMeta] from another [PageMeta].
 func (pm *PageMeta) update(meta PageMeta) {
 	if meta.ItemCount > 0 {
 		pm.SetItemCount(meta.ItemCount)

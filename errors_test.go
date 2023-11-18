@@ -17,7 +17,6 @@
 package depaginator
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,12 +24,12 @@ import (
 
 func TestPageErrorError(t *testing.T) {
 	obj := PageError{
-		Err: errors.New("some error"),
+		Err: assert.AnError,
 	}
 
 	result := obj.Error()
 
-	assert.Equal(t, "some error", result)
+	assert.Equal(t, assert.AnError.Error(), result)
 }
 
 func TestPageErrorUnwrap(t *testing.T) {

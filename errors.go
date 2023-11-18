@@ -16,8 +16,8 @@
 
 package depaginator
 
-// PageError contains an error returned by the GetPage callback, along
-// with the failing page request.
+// PageError contains an error returned by the [API.GetPage] callback,
+// along with the failing page request.
 type PageError struct {
 	PageRequest PageRequest // The request that failed
 	Err         error       // The error that occurred
