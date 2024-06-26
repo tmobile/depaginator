@@ -1,4 +1,4 @@
-// Copyright 2021 T-Mobile USA, Inc.
+// Copyright 2021, 2024 T-Mobile USA, Inc.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -18,456 +18,408 @@ package depaginator
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
-func To[T any](v any) T {
-	if v == nil {
-		var empty T
-		return empty
-	}
-
-	return v.(T)
-}
-
-type mockAPI struct {
+type mockCancelFn struct {
 	mock.Mock
 }
 
-func (m *mockAPI) GetPage(ctx context.Context, pm *PageMeta, req PageRequest) ([]string, error) {
-	args := m.Called(ctx, pm, req)
-
-	return To[[]string](args.Get(0)), args.Error(1)
+func (m *mockCancelFn) Cancel() {
+	m.Called()
 }
 
-func (m *mockAPI) HandleItem(ctx context.Context, idx int, item string) {
-	m.Called(ctx, idx, item)
-}
-
-func (m *mockAPI) Done(pm PageMeta) {
-	m.Called(pm)
-}
-
-func TestDepaginate(t *testing.T) {
+func TestDepaginateBase(t *testing.T) {
 	ctx := context.Background()
-	api := &mockAPI{}
-	page0 := []string{"item 0", "item 1"}
-	page1 := []string{"item 2", "item 3"}
-	page2 := []string{"item 4"}
-	req0 := PageRequest{
+	pager := &mockPageGetter{}
+	pager.On("GetPage", mock.Anything, mock.Anything, PageRequest{
 		PageIndex: 0,
-		Request:   "page 0",
-	}
-	req1 := PageRequest{
+		Request:   "zero",
+	}).Return([]string{"one", "two", "three"}, nil).Run(func(args mock.Arguments) {
+		dp := args[1].(*Depaginator[string])
+		dp.Update(TotalPages(3), PerPage(3))
+		dp.Request(1, "one")
+		dp.Request(2, "two")
+		dp.Request(3, "three")
+	})
+	pager.On("GetPage", mock.Anything, mock.Anything, PageRequest{
 		PageIndex: 1,
-		Request:   "page 1",
-	}
-	req2 := PageRequest{
+		Request:   "one",
+	}).Return([]string{"four", "five", "six"}, nil)
+	pager.On("GetPage", mock.Anything, mock.Anything, PageRequest{
 		PageIndex: 2,
-		Request:   "page 2",
-	}
-	api.On("GetPage", mock.Anything, mock.Anything, req0).Return(page0, nil).Run(func(args mock.Arguments) {
-		meta := args[1].(*PageMeta)
-		meta.SetPerPage(2)
-		meta.AddRequest(req1)
-		meta.AddRequest(req2)
+		Request:   "two",
+	}).Return([]string{"seven", "eight"}, nil)
+	handler := &mockHandler{}
+	handler.On("Handle", ctx, 0, "one")
+	handler.On("Handle", ctx, 1, "two")
+	handler.On("Handle", ctx, 2, "three")
+	handler.On("Handle", ctx, 3, "four")
+	handler.On("Handle", ctx, 4, "five")
+	handler.On("Handle", ctx, 5, "six")
+	handler.On("Handle", ctx, 6, "seven")
+	handler.On("Handle", ctx, 7, "eight")
+	o1 := &mockOption{}
+	o1.On("apply", mock.Anything).Run(func(args mock.Arguments) {
+		dp := args[0].(*options)
+		dp.initReq = "zero"
 	})
-	api.On("GetPage", mock.Anything, mock.Anything, req1).Return(page1, nil).Run(func(args mock.Arguments) {
-		meta := args[1].(*PageMeta)
-		meta.AddRequest(req2)
+	o2 := &mockOption{}
+	o2.On("apply", mock.Anything)
+
+	dp := Depaginate[string](ctx, pager, handler, o1, o2)
+	err := dp.Wait()
+
+	assert.NoError(t, err)
+	pager.AssertExpectations(t)
+	handler.AssertExpectations(t)
+	o1.AssertExpectations(t)
+	o2.AssertExpectations(t)
+}
+
+func TestDepaginateHandlerFull(t *testing.T) {
+	ctx := context.Background()
+	pager := &mockPageGetter{}
+	pager.On("GetPage", mock.Anything, mock.Anything, PageRequest{
+		PageIndex: 0,
+		Request:   "zero",
+	}).Return([]string{"one", "two", "three"}, nil).Run(func(args mock.Arguments) {
+		dp := args[1].(*Depaginator[string])
+		dp.Update(TotalPages(3), PerPage(3))
+		dp.Request(1, "one")
+		dp.Request(2, "two")
+		dp.Request(3, "three")
 	})
-	api.On("GetPage", mock.Anything, mock.Anything, req2).Once().Return(page2, nil)
-	api.On("HandleItem", mock.Anything, 0, "item 0")
-	api.On("HandleItem", mock.Anything, 1, "item 1")
-	api.On("HandleItem", mock.Anything, 2, "item 2")
-	api.On("HandleItem", mock.Anything, 3, "item 3")
-	api.On("HandleItem", mock.Anything, 4, "item 4")
+	pager.On("GetPage", mock.Anything, mock.Anything, PageRequest{
+		PageIndex: 1,
+		Request:   "one",
+	}).Return([]string{"four", "five", "six"}, nil)
+	pager.On("GetPage", mock.Anything, mock.Anything, PageRequest{
+		PageIndex: 2,
+		Request:   "two",
+	}).Return([]string{"seven", "eight"}, nil)
+	handler := &mockHandlerFull{}
+	handler.On("Start", ctx, 0, 0, 0)
+	handler.On("Handle", ctx, 0, "one")
+	handler.On("Handle", ctx, 1, "two")
+	handler.On("Handle", ctx, 2, "three")
+	handler.On("Handle", ctx, 3, "four")
+	handler.On("Handle", ctx, 4, "five")
+	handler.On("Handle", ctx, 5, "six")
+	handler.On("Handle", ctx, 6, "seven")
+	handler.On("Handle", ctx, 7, "eight")
+	handler.On("Update", ctx, 0, 3, 3)
+	handler.On("Update", ctx, 8, 3, 3)
+	handler.On("Done", ctx, 8, 3, 3)
+	o1 := &mockOption{}
+	o1.On("apply", mock.Anything).Run(func(args mock.Arguments) {
+		dp := args[0].(*options)
+		dp.initReq = "zero"
+	})
+	o2 := &mockOption{}
+	o2.On("apply", mock.Anything)
 
-	obj := Depaginate[string](ctx, api, req0)
-	obj.wg.Wait()
+	dp := Depaginate[string](ctx, pager, handler, o1, o2)
+	err := dp.Wait()
 
-	assert.Nil(t, obj.errors)
-	api.AssertExpectations(t)
+	assert.NoError(t, err)
+	pager.AssertExpectations(t)
+	handler.AssertExpectations(t)
+	o1.AssertExpectations(t)
+	o2.AssertExpectations(t)
 }
 
-func TestDepaginatorWait(t *testing.T) {
-	api := &mockAPI{}
-	api.On("Done", PageMeta{PerPage: 5})
-	errs := []error{
-		PageError{
-			PageRequest: PageRequest{PageIndex: 1},
-		},
-		PageError{
-			Err: assert.AnError,
-		},
-	}
-	obj := &Depaginator[string]{
-		errors: errs,
-		api:    api,
-		meta:   &PageMeta{PerPage: 5},
-		wg:     &sync.WaitGroup{},
-	}
-
-	result := obj.Wait()
-
-	assert.Equal(t, errors.Join(errs...), result)
-	api.AssertExpectations(t)
-}
-
-func TestDepaginatorRegisterCanceler(t *testing.T) {
-	obj := &Depaginator[string]{
-		meta: &PageMeta{
-			ItemCount: 50,
-			PageCount: 10,
-			PerPage:   5,
-		},
-		cancelers: map[int]context.CancelFunc{},
-	}
-
-	result := obj.registerCanceler(17, func() {})
-
-	assert.Equal(t, PageMeta{
-		ItemCount: 50,
-		PageCount: 10,
-		PerPage:   5,
-	}, result)
-	assert.Contains(t, obj.cancelers, 17)
-}
-
-type testCanceler struct {
-	Canceled bool
-}
-
-func (tc *testCanceler) Cancel() {
-	tc.Canceled = true
-}
-
-func TestDepaginatorCancelPages(t *testing.T) {
-	page1 := &testCanceler{}
-	page3 := &testCanceler{}
-	page5 := &testCanceler{}
-	page7 := &testCanceler{}
-	obj := &Depaginator[string]{
-		cancelers: map[int]context.CancelFunc{
-			1: page1.Cancel,
-			3: page3.Cancel,
-			5: page5.Cancel,
-			7: page7.Cancel,
-		},
-	}
-
-	obj.cancelPages(3)
-
-	assert.False(t, page1.Canceled)
-	assert.False(t, page3.Canceled)
-	assert.True(t, page5.Canceled)
-	assert.True(t, page7.Canceled)
-}
-
-func TestDepaginatorIssueRequestsBase(t *testing.T) {
+func TestDepaginatorDaemonBase(t *testing.T) {
 	ctx := context.Background()
-	api := &mockAPI{}
-	page := []string{"item 0", "item 1", "item 2", "item 3", "item 4"}
-	reqs := []PageRequest{
-		{
-			PageIndex: 0,
-			Request:   "page 0",
-		},
-		{
-			PageIndex: 1,
-			Request:   "page 1",
-		},
-	}
 	obj := &Depaginator[string]{
-		meta: &PageMeta{
-			PerPage: 5,
-		},
-		api:       api,
-		cancelers: map[int]context.CancelFunc{},
-		pages:     &pageMap{},
-		wg:        &sync.WaitGroup{},
+		ctx:     ctx,
+		updates: make(chan update[string], DefaultCapacity),
+		done:    make(chan struct{}),
 	}
-	obj.pages.CheckAndSet(0)
-	api.On("GetPage", mock.Anything, mock.Anything, reqs[1]).Return(page, nil)
-	api.On("HandleItem", mock.Anything, 5, "item 0")
-	api.On("HandleItem", mock.Anything, 6, "item 1")
-	api.On("HandleItem", mock.Anything, 7, "item 2")
-	api.On("HandleItem", mock.Anything, 8, "item 3")
-	api.On("HandleItem", mock.Anything, 9, "item 4")
+	u1 := &mockUpdate{}
+	u1.On("applyUpdate", obj)
+	obj.updates <- u1
+	u2 := &mockUpdate{}
+	u2.On("applyUpdate", obj).Run(func(args mock.Arguments) {
+		depag := args[0].(*Depaginator[string])
+		depag.totalItems = 20
+	})
+	obj.updates <- u2
+	u3 := &mockUpdate{}
+	u3.On("applyUpdate", obj).Run(func(args mock.Arguments) {
+		depag := args[0].(*Depaginator[string])
+		depag.totalPages = 4
+	})
+	obj.updates <- u3
+	u4 := &mockUpdate{}
+	u4.On("applyUpdate", obj).Run(func(args mock.Arguments) {
+		depag := args[0].(*Depaginator[string])
+		depag.perPage = 5
+	})
+	obj.updates <- u4
+	u5 := &mockUpdate{}
+	u5.On("applyUpdate", obj)
+	obj.updates <- u5
+	close(obj.updates)
 
-	obj.issueRequests(ctx, reqs)
-	obj.wg.Wait()
+	obj.daemon()
 
-	assert.Nil(t, obj.errors)
-	api.AssertExpectations(t)
+	select {
+	case <-obj.done:
+	default:
+		assert.Fail(t, "daemon failed to close channel")
+	}
+	u1.AssertExpectations(t)
+	u2.AssertExpectations(t)
+	u3.AssertExpectations(t)
+	u4.AssertExpectations(t)
+	u5.AssertExpectations(t)
 }
 
-func TestDepaginatorIssueRequestsTooManyPages(t *testing.T) {
+func TestDepaginatorDaemonWithUpdater(t *testing.T) {
 	ctx := context.Background()
-	api := &mockAPI{}
-	page := []string{"item 0", "item 1", "item 2", "item 3", "item 4"}
-	reqs := []PageRequest{
-		{
-			PageIndex: 0,
-			Request:   "page 0",
-		},
-		{
-			PageIndex: 1,
-			Request:   "page 1",
-		},
-		{
-			PageIndex: 2,
-			Request:   "page 2",
-		},
-	}
+	updater := &mockUpdater{}
+	updater.On("Update", ctx, 20, 0, 0)
+	updater.On("Update", ctx, 20, 4, 0)
+	updater.On("Update", ctx, 20, 4, 5)
 	obj := &Depaginator[string]{
-		meta: &PageMeta{
-			PageCount: 2,
-			PerPage:   5,
-		},
-		api:       api,
-		cancelers: map[int]context.CancelFunc{},
-		pages:     &pageMap{},
-		wg:        &sync.WaitGroup{},
+		ctx:     ctx,
+		updater: updater,
+		updates: make(chan update[string], DefaultCapacity),
+		done:    make(chan struct{}),
 	}
-	obj.pages.CheckAndSet(0)
-	api.On("GetPage", mock.Anything, mock.Anything, reqs[1]).Return(page, nil)
-	api.On("HandleItem", mock.Anything, 5, "item 0")
-	api.On("HandleItem", mock.Anything, 6, "item 1")
-	api.On("HandleItem", mock.Anything, 7, "item 2")
-	api.On("HandleItem", mock.Anything, 8, "item 3")
-	api.On("HandleItem", mock.Anything, 9, "item 4")
+	u1 := &mockUpdate{}
+	u1.On("applyUpdate", obj)
+	obj.updates <- u1
+	u2 := &mockUpdate{}
+	u2.On("applyUpdate", obj).Run(func(args mock.Arguments) {
+		depag := args[0].(*Depaginator[string])
+		depag.totalItems = 20
+	})
+	obj.updates <- u2
+	u3 := &mockUpdate{}
+	u3.On("applyUpdate", obj).Run(func(args mock.Arguments) {
+		depag := args[0].(*Depaginator[string])
+		depag.totalPages = 4
+	})
+	obj.updates <- u3
+	u4 := &mockUpdate{}
+	u4.On("applyUpdate", obj).Run(func(args mock.Arguments) {
+		depag := args[0].(*Depaginator[string])
+		depag.perPage = 5
+	})
+	obj.updates <- u4
+	u5 := &mockUpdate{}
+	u5.On("applyUpdate", obj)
+	obj.updates <- u5
+	close(obj.updates)
 
-	obj.issueRequests(ctx, reqs)
-	obj.wg.Wait()
+	obj.daemon()
 
-	assert.Nil(t, obj.errors)
-	api.AssertExpectations(t)
+	select {
+	case <-obj.done:
+	default:
+		assert.Fail(t, "daemon failed to close channel")
+	}
+	u1.AssertExpectations(t)
+	u2.AssertExpectations(t)
+	u3.AssertExpectations(t)
+	u4.AssertExpectations(t)
+	u5.AssertExpectations(t)
 }
 
-func TestDepaginatorPageErrorBase(t *testing.T) {
-	req := PageRequest{
-		PageIndex: 5,
+func TestDepaginatorWaitBase(t *testing.T) {
+	obj := &Depaginator[string]{
+		totalItems: 20,
+		totalPages: 4,
+		perPage:    5,
+		wg:         &sync.WaitGroup{},
+		updates:    make(chan update[string]),
+		done:       make(chan struct{}),
 	}
-	obj := &Depaginator[string]{}
+	close(obj.done)
 
-	obj.pageError(req, assert.AnError)
+	err := obj.Wait()
 
-	assert.Equal(t, &Depaginator[string]{
-		errors: []error{
-			PageError{
-				PageRequest: req,
-				Err:         assert.AnError,
-			},
-		},
-	}, obj)
+	assert.NoError(t, err)
+	select {
+	case <-obj.updates:
+	default:
+		assert.Fail(t, "Wait failed to close updates channel")
+	}
 }
 
-func TestDepaginatorPageErrorCanceled(t *testing.T) {
-	req := PageRequest{
-		PageIndex: 5,
+func TestDepaginatorWaitWithDoner(t *testing.T) {
+	ctx := context.Background()
+	doner := &mockDoner{}
+	doner.On("Done", ctx, 20, 4, 5)
+	obj := &Depaginator[string]{
+		ctx:        ctx,
+		totalItems: 20,
+		totalPages: 4,
+		perPage:    5,
+		doner:      doner,
+		wg:         &sync.WaitGroup{},
+		updates:    make(chan update[string]),
+		done:       make(chan struct{}),
 	}
-	obj := &Depaginator[string]{}
+	close(obj.done)
 
-	obj.pageError(req, context.Canceled)
+	err := obj.Wait()
 
-	assert.Equal(t, &Depaginator[string]{}, obj)
+	assert.NoError(t, err)
+	select {
+	case <-obj.updates:
+	default:
+		assert.Fail(t, "Wait failed to close updates channel")
+	}
+	doner.AssertExpectations(t)
 }
 
-func TestDepaginatorPageErrorDeadlineExceeded(t *testing.T) {
-	req := PageRequest{
-		PageIndex: 5,
+func TestDepaginatorUpdateInternal(t *testing.T) {
+	obj := &Depaginator[string]{
+		updates: make(chan update[string], DefaultCapacity),
 	}
-	obj := &Depaginator[string]{}
+	u := &mockUpdate{}
 
-	obj.pageError(req, context.DeadlineExceeded)
+	obj.update(u)
 
-	assert.Equal(t, &Depaginator[string]{}, obj)
+	close(obj.updates)
+	assert.Len(t, obj.updates, 1)
+	assert.Same(t, u, <-obj.updates)
 }
 
 func TestDepaginatorGetPageBase(t *testing.T) {
 	ctx := context.Background()
-	api := &mockAPI{}
-	page := []string{"item 0", "item 1", "item 2", "item 3", "item 4"}
-	req := PageRequest{
-		PageIndex: 1,
-		Request:   "page 1",
-	}
-	page2 := &testCanceler{}
+	pager := &mockPageGetter{}
 	obj := &Depaginator[string]{
-		meta: &PageMeta{
-			PageCount: 2,
-		},
-		api: api,
-		cancelers: map[int]context.CancelFunc{
-			2: page2.Cancel,
-		},
-		pages: &pageMap{},
-		wg:    &sync.WaitGroup{},
+		ctx:     ctx,
+		pager:   pager,
+		updates: make(chan update[string], DefaultCapacity),
 	}
-	api.On("GetPage", mock.Anything, &PageMeta{
-		PageCount: 2,
-	}, req).Return(page, nil).Run(func(args mock.Arguments) {
-		meta := args[1].(*PageMeta)
-		meta.SetPerPage(5)
-	})
-	api.On("HandleItem", mock.Anything, 5, "item 0")
-	api.On("HandleItem", mock.Anything, 6, "item 1")
-	api.On("HandleItem", mock.Anything, 7, "item 2")
-	api.On("HandleItem", mock.Anything, 8, "item 3")
-	api.On("HandleItem", mock.Anything, 9, "item 4")
-	obj.wg.Add(1)
-
-	obj.getPage(ctx, req)
-	obj.wg.Wait()
-
-	assert.Nil(t, obj.errors)
-	assert.Equal(t, 2, obj.meta.PageCount)
-	assert.Equal(t, 10, obj.meta.ItemCount)
-	assert.Equal(t, 5, obj.meta.PerPage)
-	assert.True(t, page2.Canceled)
-	api.AssertExpectations(t)
-}
-
-func TestDepaginatorGetPageShortPage(t *testing.T) {
-	ctx := context.Background()
-	api := &mockAPI{}
-	page := []string{"item 0", "item 1", "item 2", "item 3"}
 	req := PageRequest{
-		PageIndex: 1,
-		Request:   "page 1",
+		PageIndex: 5,
+		Request:   "five",
 	}
-	page2 := &testCanceler{}
-	obj := &Depaginator[string]{
-		meta: &PageMeta{
-			PageCount: 2,
-		},
-		api: api,
-		cancelers: map[int]context.CancelFunc{
-			2: page2.Cancel,
-		},
-		pages: &pageMap{},
-		wg:    &sync.WaitGroup{},
+	pager.On("GetPage", mock.Anything, obj, req).Return([]string{"one", "two", "three"}, nil)
+
+	obj.getPage(req)
+
+	close(obj.updates)
+	updates := []update[string]{}
+	for u := range obj.updates {
+		updates = append(updates, u)
 	}
-	api.On("GetPage", mock.Anything, &PageMeta{
-		PageCount: 2,
-	}, req).Return(page, nil).Run(func(args mock.Arguments) {
-		meta := args[1].(*PageMeta)
-		meta.SetPerPage(5)
-		meta.AddRequest(PageRequest{
-			PageIndex: 2,
-			Request:   "page 2",
-		})
-	})
-	api.On("HandleItem", mock.Anything, 5, "item 0")
-	api.On("HandleItem", mock.Anything, 6, "item 1")
-	api.On("HandleItem", mock.Anything, 7, "item 2")
-	api.On("HandleItem", mock.Anything, 8, "item 3")
-	obj.wg.Add(1)
-
-	obj.getPage(ctx, req)
-	obj.wg.Wait()
-
-	assert.Nil(t, obj.errors)
-	assert.Equal(t, 2, obj.meta.PageCount)
-	assert.Equal(t, 9, obj.meta.ItemCount)
-	assert.Equal(t, 5, obj.meta.PerPage)
-	assert.True(t, page2.Canceled)
-	api.AssertExpectations(t)
+	assert.Len(t, updates, 4)
+	require.IsType(t, cancelerFor[string]{}, updates[0])
+	assert.Equal(t, 5, updates[0].(cancelerFor[string]).page)
+	assert.Equal(t, withdrawCanceler[string](5), updates[1])
+	assert.Equal(t, itemHandler[string]{
+		idx:  5,
+		page: []string{"one", "two", "three"},
+	}, updates[2])
+	assert.Equal(t, pageDone[string]{}, updates[3])
+	pager.AssertExpectations(t)
 }
 
 func TestDepaginatorGetPageError(t *testing.T) {
 	ctx := context.Background()
-	api := &mockAPI{}
-	req := PageRequest{
-		PageIndex: 1,
-		Request:   "page 1",
-	}
-	page2 := &testCanceler{}
+	pager := &mockPageGetter{}
 	obj := &Depaginator[string]{
-		meta: &PageMeta{
-			PageCount: 2,
-		},
-		api: api,
-		cancelers: map[int]context.CancelFunc{
-			2: page2.Cancel,
-		},
-		pages: &pageMap{},
-		wg:    &sync.WaitGroup{},
+		ctx:     ctx,
+		pager:   pager,
+		updates: make(chan update[string], DefaultCapacity),
 	}
-	api.On("GetPage", mock.Anything, &PageMeta{
-		PageCount: 2,
-	}, req).Return(nil, assert.AnError)
-	obj.wg.Add(1)
+	req := PageRequest{
+		PageIndex: 5,
+		Request:   "five",
+	}
+	pager.On("GetPage", mock.Anything, obj, req).Return(nil, assert.AnError)
 
-	obj.getPage(ctx, req)
-	obj.wg.Wait()
+	obj.getPage(req)
 
-	assert.Equal(t, []error{
-		PageError{
-			PageRequest: req,
-			Err:         assert.AnError,
-		},
-	}, obj.errors)
-	assert.Equal(t, 2, obj.meta.PageCount)
-	assert.Equal(t, 0, obj.meta.ItemCount)
-	assert.Equal(t, 0, obj.meta.PerPage)
-	assert.False(t, page2.Canceled)
-	api.AssertExpectations(t)
+	close(obj.updates)
+	updates := []update[string]{}
+	for u := range obj.updates {
+		updates = append(updates, u)
+	}
+	assert.Len(t, updates, 4)
+	require.IsType(t, cancelerFor[string]{}, updates[0])
+	assert.Equal(t, 5, updates[0].(cancelerFor[string]).page)
+	assert.Equal(t, withdrawCanceler[string](5), updates[1])
+	assert.Equal(t, errorSaver[string]{
+		req: req,
+		err: assert.AnError,
+	}, updates[2])
+	assert.Equal(t, pageDone[string]{}, updates[3])
+	pager.AssertExpectations(t)
 }
 
-func TestDepaginatorGetPageRecurse(t *testing.T) {
-	ctx := context.Background()
-	api := &mockAPI{}
-	page1 := []string{"item 0", "item 1", "item 2", "item 3", "item 4"}
-	page2 := []string{"item 5"}
-	req1 := PageRequest{
-		PageIndex: 1,
-		Request:   "page 1",
-	}
-	req2 := PageRequest{
-		PageIndex: 2,
-		Request:   "page 2",
-	}
+func TestDepaginatorUpdateBase(t *testing.T) {
 	obj := &Depaginator[string]{
-		meta: &PageMeta{
-			PageCount: 3,
-		},
-		api:       api,
-		cancelers: map[int]context.CancelFunc{},
-		pages:     &pageMap{},
-		wg:        &sync.WaitGroup{},
+		updates: make(chan update[string], DefaultCapacity),
 	}
-	api.On("GetPage", mock.Anything, &PageMeta{
-		PageCount: 3,
-	}, req1).Return(page1, nil).Run(func(args mock.Arguments) {
-		meta := args[1].(*PageMeta)
-		meta.SetPerPage(5)
-		meta.AddRequest(req2)
-	})
-	api.On("GetPage", mock.Anything, &PageMeta{
-		PageCount: 3,
-		PerPage:   5,
-	}, req2).Return(page2, nil)
-	api.On("HandleItem", mock.Anything, 5, "item 0")
-	api.On("HandleItem", mock.Anything, 6, "item 1")
-	api.On("HandleItem", mock.Anything, 7, "item 2")
-	api.On("HandleItem", mock.Anything, 8, "item 3")
-	api.On("HandleItem", mock.Anything, 9, "item 4")
-	api.On("HandleItem", mock.Anything, 10, "item 5")
-	obj.wg.Add(1)
 
-	obj.getPage(ctx, req1)
-	obj.wg.Wait()
+	obj.Update(TotalItems(20), TotalPages(4), PerPage(5))
 
-	assert.Nil(t, obj.errors)
-	assert.Equal(t, 3, obj.meta.PageCount)
-	assert.Equal(t, 11, obj.meta.ItemCount)
-	assert.Equal(t, 5, obj.meta.PerPage)
-	api.AssertExpectations(t)
+	select {
+	case update := <-obj.updates:
+		assert.Equal(t, bundle[string]{
+			totalItems[string](20),
+			totalPages[string](4),
+			perPage[string](5),
+		}, update)
+	default:
+		assert.Fail(t, "Update failed to send update on channel")
+	}
+	close(obj.updates)
+}
+
+func TestDepaginatorUpdateNoUpdates(t *testing.T) {
+	obj := &Depaginator[string]{
+		updates: make(chan update[string], DefaultCapacity),
+	}
+
+	obj.Update(20, 4, 5)
+
+	select {
+	case <-obj.updates:
+		assert.Fail(t, "Update sent unexpected update on channel")
+	default:
+	}
+	close(obj.updates)
+}
+
+func TestDepaginatorRequest(t *testing.T) {
+	obj := &Depaginator[string]{
+		updates: make(chan update[string], DefaultCapacity),
+	}
+
+	obj.Request(3, "three")
+
+	select {
+	case update := <-obj.updates:
+		assert.Equal(t, pageRequest[string]{
+			idx: 3,
+			req: "three",
+		}, update)
+	default:
+		assert.Fail(t, "Request failed to send update on channel")
+	}
+	close(obj.updates)
+}
+
+func TestDepaginatorPerPage(t *testing.T) {
+	obj := &Depaginator[string]{
+		perPage: 50,
+	}
+
+	result := obj.PerPage()
+
+	assert.Equal(t, 50, result)
 }

@@ -2,7 +2,7 @@ linters:
   enable:
   - exhaustive
   - goconst
-  - goerr113
+  - err113
   - gofmt
   - gofumpt
   - goimports

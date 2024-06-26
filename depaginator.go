@@ -1,4 +1,4 @@
-// Copyright 2021 T-Mobile USA, Inc.
+// Copyright 2021, 2024 T-Mobile USA, Inc.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,13 +15,16 @@
 // its contributors may be used to endorse or promote products
 
 // Package depaginator contains an implementation of a function,
-// Depaginate, that allows iterating over all items in a paginated
-// API.  The consuming application needs to implement the API
-// interface and pass Depaginate a context.Context, the API, and an
-// initial page request, then call Wait on the result; the Depaginator
-// will then take care of the rest, calling the API.GetPage method to
-// retrieve pages of results; the API.HandleItem method to handle the
-// found items; and API.Done when the iteration is complete.
+// [Depaginate], that allows iterating over all items in a paginated
+// API.  The consuming application needs to pass [Depaginate] a
+// [context.Context], a [PageGetter] page retriever, and an item
+// [Handler], then call [Depaginator.Wait] on the result; the
+// [Depaginator] will then take care of the rest, calling the
+// [PageGetter.GetPage] method to retrieve pages of results and the
+// [Handler.Handle] method to handle the found items.  Options exist
+// to call a [Starter.Start] method before beginning, [Updater.Update]
+// method when the total number of pages or items is discovered; and
+// [Doner.Done] when the iteration is complete.
 package depaginator
 
 import (
@@ -30,167 +33,233 @@ import (
 	"sync"
 )
 
-// API is the type that is passed to [Depaginate].  Methods on this
-// type are called to get pages and handle items from the pages.
-type API[T any] interface {
-	// GetPage is a page retriever function.  It takes a [PageMeta]
-	// object, which it should fill in, and a PageRequest object, and
-	// returns a list of items of the type and an error.
-	GetPage(ctx context.Context, pm *PageMeta, req PageRequest) ([]T, error)
+// PageRequest describes a request for a specific page.  Most of the
+// page request lives in the Request field, which can be anything
+// needed by the application; the only other field is the PageIndex
+// field, which identifies the index of the page.  Note that PageIndex
+// is 0-based.
+type PageRequest struct {
+	PageIndex int // The index of the page
+	Request   any // The actual data needed to request the page
+}
 
-	// HandleItem is a function called with an item by the
-	// [Depaginator].
-	HandleItem(ctx context.Context, idx int, item T)
+// Depaginator is returned by the [Depaginate] function to allow the
+// caller to wait for the iteration to complete.  This object is also
+// passed to [PageGetter.GetPage], and may be used to call
+// [Depaginator.Update] and [Depaginator.Request] to update the number
+// of items/pages or to request fetching additional pages,
+// respectively.
+type Depaginator[T any] struct {
+	ctx        context.Context // A context for calls
+	errors     []error         // Errors encountered
+	totalItems int             // Total number of items
+	totalPages int             // Total number of pages
+	perPage    int             // Items per page
+	pager      PageGetter[T]   // Object to retrieve pages with
+	handler    Handler[T]      // Object to use to handle items
+	starter    Starter         // Optional object to start iteration
+	updater    Updater         // Optional object to notify updates to items/pages
+	doner      Doner           // Optional object to notify end iteration
 
-	// Done is a function called when the [Depaginator] is done.  It
-	// is called by [Depaginator.Wait].
-	Done(pm PageMeta)
+	cancelers map[int]context.CancelFunc // Mapping of page index to cancel function
+	pages     *pageMap                   // Bitmap of requested pages
+	wg        *sync.WaitGroup            // A wait group for Wait to wait upon
+	updates   chan update[T]             // Updates to process
+	done      chan struct{}              // Used to signal the daemon has exited
 }
 
 // Depaginate is a tool for iterating over all items in a paginated
 // response.  It uses goroutines to perform its work, and is capable
 // of issuing requests for every available page simultaneously, so
-// callers should ensure the [API.GetPage] routine passed to
+// callers should ensure the [PageGetter.GetPage] routine passed to
 // Depaginate incorporates some sort of limiter to ensure they don't
-// overwhelm any rate limits that may be set on the target API.
-func Depaginate[T any](ctx context.Context, api API[T], req PageRequest) *Depaginator[T] {
-	dp := &Depaginator[T]{
-		meta:      &PageMeta{},
-		api:       api,
-		cancelers: map[int]context.CancelFunc{},
-		pages:     &pageMap{},
-		wg:        &sync.WaitGroup{},
+// overwhelm any rate limits that may be set on the target API.  The
+// [Handler.Handle] method will be called for each item.  Note that
+// Depaginate returns a [Depaginator], and the calling application is
+// expected to call [Depaginator.Wait].
+func Depaginate[T any](ctx context.Context, pager PageGetter[T], handler Handler[T], opts ...Option) *Depaginator[T] {
+	// Prepare the options
+	o := options{
+		capacity: DefaultCapacity,
+	}
+	if tmp, ok := handler.(Starter); ok {
+		o.starter = tmp
+	}
+	if tmp, ok := handler.(Updater); ok {
+		o.updater = tmp
+	}
+	if tmp, ok := handler.(Doner); ok {
+		o.doner = tmp
 	}
 
-	// Get the first page
-	dp.issueRequests(ctx, []PageRequest{req})
+	// Parse the provided options
+	for _, opt := range opts {
+		opt.apply(&o)
+	}
+
+	// Construct the depaginator
+	dp := &Depaginator[T]{
+		ctx:        ctx,
+		pager:      pager,
+		totalItems: o.totalItems,
+		totalPages: o.totalPages,
+		perPage:    o.perPage,
+		handler:    handler,
+		starter:    o.starter,
+		updater:    o.updater,
+		doner:      o.doner,
+		cancelers:  map[int]context.CancelFunc{},
+		pages:      &pageMap{},
+		wg:         &sync.WaitGroup{},
+		updates:    make(chan update[T], o.capacity),
+		done:       make(chan struct{}),
+	}
+
+	// Initialize the handler if required
+	if dp.starter != nil {
+		dp.starter.Start(ctx, dp.totalItems, dp.totalPages, dp.perPage)
+	}
+
+	// Issue the first request; can't use Depaginator.Request because
+	// of a race: the update could be sitting in the queue, not yet
+	// processed by the daemon, and Depaginator.Wait could be called.
+	pageRequest[T]{
+		idx: 0,
+		req: o.initReq,
+	}.applyUpdate(dp)
+
+	// Start the daemon
+	go dp.daemon()
 
 	return dp
 }
 
-// Depaginator is returned by the [Depaginate] function to allow the
-// caller to wait for the iteration to complete.
-type Depaginator[T any] struct {
-	sync.Mutex                            // Protects the set of errors and page metadata
-	errors     []error                    // The errors encountered
-	meta       *PageMeta                  // Page metadata
-	api        API[T]                     // The API to use for depagination
-	cancelers  map[int]context.CancelFunc // Mapping of page index to cancel func
-	pages      *pageMap                   // Bitmap of requested pages
-	wg         *sync.WaitGroup            // A wait group for Wait to wait upon
+// daemon is the goroutine that processes updates from the
+// [PageGetter.GetPage] methods.
+func (dp *Depaginator[T]) daemon() {
+	defer close(dp.done)
+	for u := range dp.updates {
+		// Save original metadata
+		origItems, origPages, origPer := dp.totalItems, dp.totalPages, dp.perPage
+
+		// Apply the update
+		u.applyUpdate(dp)
+
+		// If there were any changes, call the updater
+		if dp.updater != nil && (origItems != dp.totalItems || origPages != dp.totalPages || origPer != dp.perPage) {
+			dp.updater.Update(dp.ctx, dp.totalItems, dp.totalPages, dp.perPage)
+		}
+	}
 }
 
-// Wait waits for the iteration to complete.  It returns any error
-// encountered during the iteration, wrapped by [errors.Join].  (Note
-// that the ordering of such errors is undefined.)  Each error in the
-// list is a [PageError]; this bundles together the error that
-// occurred along with the page request that resulted in the error.
+// Wait waits for the iteration to complete.  It returns the errors
+// encountered during the iteration, wrapped by [errors.Join].  Each
+// error in the list is a [PageError], which bundles together the
+// error and the corresponding page request.
 func (dp *Depaginator[T]) Wait() error {
+	// Wait for the pages and items
 	dp.wg.Wait()
-	dp.api.Done(*dp.meta)
+
+	// Signal the daemon to finish up
+	close(dp.updates)
+	<-dp.done
+
+	// Call the doner
+	if dp.doner != nil {
+		dp.doner.Done(dp.ctx, dp.totalItems, dp.totalPages, dp.perPage)
+	}
 
 	return errors.Join(dp.errors...)
 }
 
-// registerCanceler registers a canceler for the page context and
-// retrieves the current page metadata.
-func (dp *Depaginator[T]) registerCanceler(idx int, cancelFn context.CancelFunc) PageMeta {
-	dp.Lock()
-	defer dp.Unlock()
+// update sends an update to the daemon.
+func (dp *Depaginator[T]) update(update update[T]) {
+	dp.updates <- update
+}
+
+// getPage is a wrapper around [PageGetter.GetPage] that implements
+// the processing required to perform the depagination.
+func (dp *Depaginator[T]) getPage(req PageRequest) {
+	// Note: getPage is not complete until all its updates are
+	// complete, so we use an update object to update the wait group
+	defer dp.update(pageDone[T]{})
+
+	// First, construct the child context
+	childCtx, cancelFn := context.WithCancel(dp.ctx)
+	defer cancelFn()
 
 	// Register the canceler
-	dp.cancelers[idx] = cancelFn
+	dp.update(cancelerFor[T]{
+		page:     req.PageIndex,
+		cancelFn: cancelFn,
+	})
 
-	// Prepare the page meta
-	meta := *dp.meta
+	// Get the page
+	page, err := dp.pager.GetPage(childCtx, dp, req)
 
-	return meta
-}
+	// Withdraw the canceler
+	dp.update(withdrawCanceler[T](req.PageIndex))
 
-// cancelPages cancels pages with an index greater than the one
-// specified.  This method must be called with the mutex locked.
-func (dp *Depaginator[T]) cancelPages(idx int) {
-	for page, canceler := range dp.cancelers {
-		if page > idx {
-			canceler()
-		}
-	}
-}
-
-// issueRequests issues the specified page requests.  This method must
-// be called with the mutex locked.
-func (dp *Depaginator[T]) issueRequests(ctx context.Context, reqs []PageRequest) {
-	for _, req := range reqs {
-		// Skip requests for pages we know don't exist
-		if dp.meta.PageCount > 0 && req.PageIndex >= dp.meta.PageCount {
-			continue
-		}
-		if !dp.pages.CheckAndSet(req.PageIndex) {
-			dp.wg.Add(1)
-			go dp.getPage(ctx, req)
-		}
-	}
-}
-
-// pageError is called if the [API.GetPage] method returned an error.
-// This method must be called with the mutex locked.
-func (dp *Depaginator[T]) pageError(req PageRequest, err error) {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	// If there was an error, save it
+	if err != nil {
+		dp.update(errorSaver[T]{
+			req: req,
+			err: err,
+		})
 		return
 	}
 
-	dp.errors = append(dp.errors, PageError{
-		PageRequest: req,
-		Err:         err,
+	// Handle the items
+	dp.update(itemHandler[T]{
+		idx:  req.PageIndex,
+		page: page,
 	})
 }
 
-// getPage requests a page and iterates over retrieved items.  It also
-// queues up additional requests provided via the [PageMeta] object
-// passed to [API.GetPage].
-func (dp *Depaginator[T]) getPage(ctx context.Context, req PageRequest) {
-	defer dp.wg.Done()
-
-	// First, construct the child context
-	childCtx, cancelFn := context.WithCancel(ctx)
-	defer cancelFn()
-
-	// Construct the page meta and save the canceler
-	meta := dp.registerCanceler(req.PageIndex, cancelFn)
-
-	// Get the page
-	page, err := dp.api.GetPage(childCtx, &meta, req)
-
-	// Lock the object to safely handle the result
-	dp.Lock()
-	defer dp.Unlock()
-
-	// Withdraw the canceler
-	delete(dp.cancelers, req.PageIndex)
-
-	// Did we get an error?
-	if err != nil {
-		dp.pageError(req, err)
-		return
+// Update allows updating the total number of items, total number of
+// pages, or the items per page.  The arguments passed to Update
+// should be [TotalItems], [TotalPages], or [PerPage]; any other
+// argument types will be ignored.
+func (dp *Depaginator[T]) Update(updates ...any) {
+	ups := bundle[T]{}
+	for _, u := range updates {
+		switch update := u.(type) {
+		case TotalItems:
+			ups = append(ups, totalItems[T](int(update)))
+		case TotalPages:
+			ups = append(ups, totalPages[T](int(update)))
+		case PerPage:
+			ups = append(ups, perPage[T](int(update)))
+		}
 	}
 
-	// Check for any metadata updates
-	dp.meta.update(meta)
-
-	// Are there returned requests?
-	if meta.Requests == nil || len(meta.Requests) == 0 || len(page) < dp.meta.PerPage {
-		// No more pages
-		dp.meta.SetPageCount(req.PageIndex + 1)
-		dp.meta.SetItemCount(dp.meta.PerPage*req.PageIndex + len(page))
-		dp.cancelPages(req.PageIndex)
-	} else {
-		// Issue requests for the new pages
-		dp.issueRequests(ctx, meta.Requests)
+	if len(ups) > 0 {
+		dp.update(ups)
 	}
+}
 
-	// Now handle the items
-	itemBase := dp.meta.PerPage * req.PageIndex
-	for i := 0; i < len(page); i++ {
-		dp.api.HandleItem(ctx, itemBase+i, page[i])
-	}
+// Request requests the [Depaginator] retrieve a page.  Note that the
+// page index is 0-based; the first page always has index 0.  The
+// request is optional, and can contain any page-specific data, such
+// as a page link.  Duplicate page requests are ignored, as is any
+// request with an index greater than the total number of pages (if
+// known).
+func (dp *Depaginator[T]) Request(idx int, req any) {
+	dp.update(pageRequest[T]{
+		idx: idx,
+		req: req,
+	})
+}
+
+// PerPage retrieves the configured "per page" value for
+// [Depaginator].  This allows a consumer to set the number of items
+// per page when calling [Depaginate] (using the [PerPage] option).
+// Applications should be careful to not mix this functionality with
+// dynamic collection of the "per page" value, as the value is not
+// protected by any mutex; if using this method, avoid passing
+// [PerPage] to [Depaginator.Update] and arrange for a reasonable
+// default if [PerPage] is not passed to [Depaginate] (in which case,
+// this method will return 0).
+func (dp *Depaginator[T]) PerPage() int {
+	return dp.perPage
 }
