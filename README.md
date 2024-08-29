@@ -2,17 +2,22 @@
 
 [![Tag](https://img.shields.io/github/tag/tmobile/depaginator.svg)](https://github.com/tmobile/depaginator/tags)
 [![License](https://img.shields.io/hexpm/l/plug.svg)](https://github.com/tmobile/depaginator/blob/main/LICENSE)
-[![Test Report](https://travis-ci.com/tmobile/depaginator.svg?branch=main)](https://travis-ci.com/tmobile/depaginator)
 [![Godoc](https://pkg.go.dev/badge/github.com/tmobile/depaginator)](https://pkg.go.dev/github.com/tmobile/depaginator)
 [![Issue Tracker](https://img.shields.io/github/issues/tmobile/depaginator.svg)](https://github.com/tmobile/depaginator/issues)
 [![Pull Request Tracker](https://img.shields.io/github/issues-pr/tmobile/depaginator.svg)](https://github.com/tmobile/depaginator/pulls)
 [![Report Card](https://goreportcard.com/badge/github.com/tmobile/depaginator)](https://goreportcard.com/report/github.com/tmobile/depaginator)
 
-This repository contains the Depaginator.  The Depaginator is a tool for traversing all items presented by a paginated API: all pages are retrieved by independent goroutines, then each item in each page is iterated over, calling a `HandleItem` method.  The index of the item in the list is also passed to `HandleItem` for the benefit of ordering-sensitive applications.
+This repository contains the Depaginator.  The Depaginator is a tool for traversing all items presented by a paginated API: all pages are retrieved by independent goroutines, then each item in each page is iterated over, calling a `Handle` method.  The index of the item in the list is also passed to `Handle` for the benefit of ordering-sensitive applications.
 
 ## How to Use
 
-For full details, refer to the [documentation](https://pkg.go.dev/github.com/tmobile/depaginator).  The basic concept is for the consuming application to create an object that implements `GetPage`, `HandleItem`, and `Done` methods, conforming to the `depaginator.API` interface.  The `GetPage` method is passed a `PageMeta` object and a `PageRequest`, which bundles a `PageIndex` integer with an application-defined `Request`.  The `GetPage` method must then retrieve the desired page of the results, add any relevant metadata--including requests for subsequent pages--to the `PageMeta`, and return a an array of items with the type used to call `Depaginate`.  The `Depaginator` will then call `HandleItem` for each element in the `Page`.  After all pages have been retrieved and all items handled, the consuming application calls `Depaginator.Wait`, which will call the `Done` method (passing it the final `PageMeta`) and return any page retrieval errors that were encountered.
+For full details, refer to the [package documentation](https://pkg.go.dev/github.com/tmobile/depaginator).  The basic concept is for the consuming application to create one object that implements a `GetPage`, which conforms to the `PageGetter` interface, and a second object that implements `Handle`, conforming to the `Handler` interface.  The `GetPage` method is passed a `PageRequest`, which bundles a `PageIndex` integer with an application-defined `Request`.  The `GetPage` method must then retrieve the desired page of the results, add any relevant metadata--including requests for subsequent pages--via calls to the `Depaginator` object, and return a an array of items.  The `Depaginator` will then call `Handle` for each element in the returned list.  Optionally, the `Handler` may implement additional `Start`, `Update`, or `Done` methods which will be called at appropriate parts of the workflow.
+
+To actually perform the depagination operation, the application passes instances of these objects and any appropriate options to the `Depaginate` function; this returns a `Depaginator` object which the application may then `Wait` on.  Any errors encountered during the operation will be returned by `Wait`.
+
+The `PageGetter` and the `Handler` interfaces are distinct to aid in code reuse; this architecture allows for general handlers like the provided `ListHandler`, as well as allowing the `PageGetter` to be reused with different handlers, depending on the needs of the application.
+
+For convenience, the `ListHandler` type is provided; this is a `Handler` implementation which assembles the list of retrieved items into the correct order.
 
 ## Why to Use
 

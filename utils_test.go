@@ -1,4 +1,4 @@
-// Copyright 2021, 2024 T-Mobile USA, Inc.
+// Copyright 2024 T-Mobile USA, Inc.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,19 +16,11 @@
 
 package depaginator
 
-// PageError contains an error returned by the [PageGetter.GetPage]
-// callback, along with the failing page request.
-type PageError struct {
-	PageRequest PageRequest // The request that failed
-	Err         error       // The error that occurred
-}
+func To[T any](v any) T {
+	if v == nil {
+		var empty T
+		return empty
+	}
 
-// Error returns the error message.
-func (pe PageError) Error() string {
-	return pe.Err.Error()
-}
-
-// Unwrap retrieves the underlying error.
-func (pe PageError) Unwrap() error {
-	return pe.Err
+	return v.(T)
 }
