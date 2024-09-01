@@ -36,7 +36,7 @@ type PagedData struct {
 	pageAhead   int      // Number of page requests to create
 }
 
-func (pd PagedData) GetPage(_ context.Context, depag *Depaginator[string], req PageRequest) ([]string, error) {
+func (pd PagedData) GetPage(_ context.Context, depag State, req PageRequest) ([]string, error) {
 	// First, update the items and pages
 	totalItems := 0
 	if pd.reportItems {

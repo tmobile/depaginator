@@ -28,7 +28,7 @@ type mockPageGetter struct {
 	mock.Mock
 }
 
-func (m *mockPageGetter) GetPage(ctx context.Context, depag *Depaginator[string], req PageRequest) ([]string, error) {
+func (m *mockPageGetter) GetPage(ctx context.Context, depag State, req PageRequest) ([]string, error) {
 	args := m.Called(ctx, depag, req)
 
 	return To[[]string](args.Get(0)), args.Error(1)

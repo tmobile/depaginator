@@ -18,6 +18,37 @@ package depaginator
 
 import "context"
 
+// State describes the state of depagination.  It provides the
+// feedback mechanism for requesting updates to the depaginator state,
+// such as updating the total number of items or making additional
+// page requests.
+type State interface {
+	// Update allows updating the total number of items, total number
+	// of pages, or the items per page.  The arguments passed to
+	// Update should be [TotalItems], [TotalPages], or [PerPage]; any
+	// other argument types will be ignored.
+	Update(updates ...any)
+
+	// Request requests the [Depaginator] retrieve a page.  Note that
+	// the page index is 0-based; the first page always has index 0.
+	// The request is optional, and can contain any page-specific
+	// data, such as a page link.  Duplicate page requests are
+	// ignored, as is any request with an index greater than the total
+	// number of pages (if known).
+	Request(idx int, req any)
+
+	// PerPage retrieves the configured "per page" value for
+	// [Depaginator].  This allows a consumer to set the number of
+	// items per page when calling [Depaginate] (using the [PerPage]
+	// option).  Applications should be careful to not mix this
+	// functionality with dynamic collection of the "per page" value,
+	// as the value is not protected by any mutex; if using this
+	// method, avoid passing [PerPage] to [Depaginator.Update] and
+	// arrange for a reasonable default if [PerPage] is not passed to
+	// [Depaginate] (in which case, this method will return 0).
+	PerPage() int
+}
+
 // PageGetter is an interface for a GetPage method that retrieves a
 // page specified by the given [PageRequest].  It returns a slice of
 // some type or an error.  It may also call methods on the
@@ -32,14 +63,14 @@ type PageGetter[T any] interface {
 	// of pages, items per page, or additional pages to request.  Note
 	// that page requests for page indexes that are greater than the
 	// maximum known number of pages will be ignored.
-	GetPage(ctx context.Context, depag *Depaginator[T], req PageRequest) ([]T, error)
+	GetPage(ctx context.Context, depag State, req PageRequest) ([]T, error)
 }
 
 // PageGetterFunc is a wrapper for a function matching the
 // [PageGetter.GetPage] signature.  The wrapper implements the
 // [PageGetter] interface, allowing a function to be passed instead of
 // an interface implementation.
-type PageGetterFunc[T any] func(ctx context.Context, depag *Depaginator[T], req PageRequest) ([]T, error)
+type PageGetterFunc[T any] func(ctx context.Context, depag State, req PageRequest) ([]T, error)
 
 // GetPage is a page retriever function.  It is passed the
 // [Depaginator] object and a [PageRequest] object describing the page
@@ -49,7 +80,7 @@ type PageGetterFunc[T any] func(ctx context.Context, depag *Depaginator[T], req 
 // page, or additional pages to request.  Note that page requests for
 // page indexes that are greater than the maximum known number of
 // pages will be ignored.
-func (f PageGetterFunc[T]) GetPage(ctx context.Context, depag *Depaginator[T], req PageRequest) ([]T, error) {
+func (f PageGetterFunc[T]) GetPage(ctx context.Context, depag State, req PageRequest) ([]T, error) {
 	return f(ctx, depag, req)
 }
 
