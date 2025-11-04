@@ -108,6 +108,10 @@ func (lh *ListHandler[T]) Done(_ context.Context, totalItems, _, _ int) {
 
 // Handle is called for each item in a page of items retrieved by the
 // [PageGetter].  It is called with the item index and the item.
+//
+// If the Handle method panics, the panic will be captured and
+// reported to the caller of [Depaginate] as an error of type
+// [PanicError].
 func (lh *ListHandler[T]) Handle(_ context.Context, idx int, item T) {
 	lh.action(handleItem[T]{
 		idx:  idx,
@@ -117,6 +121,10 @@ func (lh *ListHandler[T]) Handle(_ context.Context, idx int, item T) {
 
 // Update is called with the new values of total items, total pages,
 // and items per page.  It should not undertake extensive processing.
+//
+// If the Update method panics, the panic will be captured and
+// reported to the caller of [Depaginate] as an error of type
+// [PanicError].
 func (lh *ListHandler[T]) Update(_ context.Context, totalItems, totalPages, perPage int) {
 	lh.action(listUpdate[T]{
 		totalItems: totalItems,

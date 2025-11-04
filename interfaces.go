@@ -63,6 +63,10 @@ type PageGetter[T any] interface {
 	// of pages, items per page, or additional pages to request.  Note
 	// that page requests for page indexes that are greater than the
 	// maximum known number of pages will be ignored.
+	//
+	// If the GetPage method panics, the panic will be captured and
+	// reported to the caller of [Depaginate] as an error of type
+	// [PanicError].
 	GetPage(ctx context.Context, depag State, req PageRequest) ([]T, error)
 }
 
@@ -80,6 +84,10 @@ type PageGetterFunc[T any] func(ctx context.Context, depag State, req PageReques
 // page, or additional pages to request.  Note that page requests for
 // page indexes that are greater than the maximum known number of
 // pages will be ignored.
+//
+// If the GetPage method panics, the panic will be captured and
+// reported to the caller of [Depaginate] as an error of type
+// [PanicError].
 func (f PageGetterFunc[T]) GetPage(ctx context.Context, depag State, req PageRequest) ([]T, error) {
 	return f(ctx, depag, req)
 }
@@ -92,6 +100,10 @@ type Handler[T any] interface {
 	// Handle is called for each item in a page of items retrieved by
 	// the [PageGetter].  It is called with the item index and the
 	// item.
+	//
+	// If the Handle method panics, the panic will be captured and
+	// reported to the caller of [Depaginate] as an error of type
+	// [PanicError].
 	Handle(ctx context.Context, idx int, item T)
 }
 
@@ -103,6 +115,10 @@ type HandlerFunc[T any] func(ctx context.Context, idx int, item T)
 
 // Handle is called for each item in a page of items retrieved by the
 // [PageGetter].  It is called with the item index and the item.
+//
+// If the Handle method panics, the panic will be captured and
+// reported to the caller of [Depaginate] as an error of type
+// [PanicError].
 func (f HandlerFunc[T]) Handle(ctx context.Context, idx int, item T) {
 	f(ctx, idx, item)
 }
@@ -140,6 +156,10 @@ type Updater interface {
 	// Update is called with the new values of total items, total
 	// pages, and items per page.  It should not undertake extensive
 	// processing.
+	//
+	// If the Update method panics, the panic will be captured and
+	// reported to the caller of [Depaginate] as an error of type
+	// [PanicError].
 	Update(ctx context.Context, totalItems, totalPages, perPage int)
 }
 
@@ -151,6 +171,10 @@ type UpdaterFunc func(ctx context.Context, totalItems, totalPages, perPage int)
 
 // Update is called with the new values of total items, total pages,
 // and items per page.  It should not undertake extensive processing.
+//
+// If the Update method panics, the panic will be captured and
+// reported to the caller of [Depaginate] as an error of type
+// [PanicError].
 func (f UpdaterFunc) Update(ctx context.Context, totalItems, totalPages, perPage int) {
 	f(ctx, totalItems, totalPages, perPage)
 }

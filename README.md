@@ -22,3 +22,7 @@ For convenience, the `ListHandler` type is provided; this is a `Handler` impleme
 ## Why to Use
 
 Many server APIs that return lists of objects will "paginate" the response to avoid overwhelming the connection or the client--or the server or database.  However, many clients consuming that API need to perform some operation on all the returned objects, such as displaying them to the user or applying additional filters to select specific items.  Especially for large lists, this process can be quite slow; this may be fine for user-interactive clients, such as command line clients, but if some other operation is being performed, such as bulk modifications, this can be unacceptably slow.  The `Depaginator` is intended to simplify the implementation of code that iterates over all the items in a list by allowing their retrieval as fast as the server API will permit.
+
+## Notes on Panics
+
+The `Depaginate` function makes extensive use of internal goroutines.  This means that panics could be lost without specific handling.  To avoid this being an issue, the library is designed to capture and report panics occurring within internal goroutines as errors of type `*PanicError`, which preserves the panic object and a stack trace.  This only occurs for calls that occur within internal goroutines, which covers `PageGetter.GetPage`, `Handler.Handle`, and `Updater.Update` callbacks.  The `Starter.Start` and `Doner.Done` callbacks are executed in the caller goroutine, and so no effort is made to catch panics caused by these callbacks.
