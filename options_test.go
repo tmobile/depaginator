@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 type mockOption struct {
@@ -299,7 +300,9 @@ func TestItemHandlerApplyupdateBase(t *testing.T) {
 	cancel6 := &mockCancelFn{}
 	cancel6.On("Cancel")
 	obj := itemHandler[string]{
-		idx:  5,
+		req: PageRequest{
+			PageIndex: 5,
+		},
 		page: []string{"foo", "bar", "baz"},
 	}
 	depag := &Depaginator[string]{
@@ -334,7 +337,9 @@ func TestItemHandlerApplyupdateMorePages(t *testing.T) {
 	cancel4 := &mockCancelFn{}
 	cancel6 := &mockCancelFn{}
 	obj := itemHandler[string]{
-		idx:  5,
+		req: PageRequest{
+			PageIndex: 5,
+		},
 		page: []string{"foo", "bar", "baz", "bink", "qux"},
 	}
 	depag := &Depaginator[string]{
@@ -358,20 +363,23 @@ func TestItemHandlerApplyupdateMorePages(t *testing.T) {
 	handler.AssertExpectations(t)
 }
 
-func TestItemHandlerHandle(t *testing.T) {
+func TestItemHandlerHandleBase(t *testing.T) {
 	ctx := context.Background()
 	handler := &mockHandler{}
 	handler.On("Handle", ctx, 25, "foo")
 	handler.On("Handle", ctx, 26, "bar")
 	handler.On("Handle", ctx, 27, "baz")
 	obj := itemHandler[string]{
-		idx:  5,
+		req: PageRequest{
+			PageIndex: 5,
+		},
 		page: []string{"foo", "bar", "baz"},
 	}
 	depag := &Depaginator[string]{
 		ctx:     ctx,
 		handler: handler,
 		wg:      &sync.WaitGroup{},
+		updates: make(chan update[string], 1),
 	}
 	depag.wg.Add(1)
 
@@ -379,6 +387,40 @@ func TestItemHandlerHandle(t *testing.T) {
 
 	depag.wg.Wait()
 	handler.AssertExpectations(t)
+	assert.Empty(t, depag.updates)
+}
+
+func TestItemHandlerHandlePanic(t *testing.T) {
+	ctx := context.Background()
+	handler := &mockHandler{}
+	handler.On("Handle", ctx, 25, "foo")
+	handler.On("Handle", ctx, 26, "bar").Panic("test panic")
+	handler.On("Handle", ctx, 27, "baz")
+	obj := itemHandler[string]{
+		req: PageRequest{
+			PageIndex: 5,
+		},
+		page: []string{"foo", "bar", "baz"},
+	}
+	depag := &Depaginator[string]{
+		ctx:     ctx,
+		handler: handler,
+		wg:      &sync.WaitGroup{},
+		updates: make(chan update[string], 1),
+	}
+	depag.wg.Add(1)
+
+	obj.handle(depag, 25)
+
+	depag.wg.Wait()
+	handler.AssertExpectations(t)
+	require.Len(t, depag.updates, 1)
+	update := <-depag.updates
+	es, ok := update.(errorSaver[string])
+	require.True(t, ok)
+	perr, ok := es.err.(*PanicError)
+	require.True(t, ok)
+	assert.Equal(t, "test panic", perr.Panic)
 }
 
 func TestPageDoneImplementsUpdate(t *testing.T) {

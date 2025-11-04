@@ -147,7 +147,9 @@ func (dp *Depaginator[T]) daemon() {
 
 		// If there were any changes, call the updater
 		if dp.updater != nil && (origItems != dp.totalItems || origPages != dp.totalPages || origPer != dp.perPage) {
-			dp.updater.Update(dp.ctx, dp.totalItems, dp.totalPages, dp.perPage)
+			if perr := catchPanic0(func() { dp.updater.Update(dp.ctx, dp.totalItems, dp.totalPages, dp.perPage) }); perr != nil {
+				dp.errors = append(dp.errors, perr)
+			}
 		}
 	}
 }
@@ -195,7 +197,7 @@ func (dp *Depaginator[T]) getPage(req PageRequest) {
 	})
 
 	// Get the page
-	page, err := dp.pager.GetPage(childCtx, dp, req)
+	page, err := catchPanic2(func() ([]T, error) { return dp.pager.GetPage(childCtx, dp, req) })
 
 	// Withdraw the canceler
 	dp.update(withdrawCanceler[T](req.PageIndex))
@@ -211,7 +213,7 @@ func (dp *Depaginator[T]) getPage(req PageRequest) {
 
 	// Handle the items
 	dp.update(itemHandler[T]{
-		idx:  req.PageIndex,
+		req:  req,
 		page: page,
 	})
 }

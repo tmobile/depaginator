@@ -218,8 +218,8 @@ func (u errorSaver[T]) applyUpdate(depag *Depaginator[T]) {
 // itemHandler is an [update] implementation that handles a page of
 // items.  The items are handled in a separate goroutine.
 type itemHandler[T any] struct {
-	idx  int // Page index
-	page []T // The page of items to handle
+	req  PageRequest // Page request
+	page []T         // The page of items to handle
 }
 
 // applyUpdate applies an update.
@@ -227,8 +227,8 @@ func (u itemHandler[T]) applyUpdate(depag *Depaginator[T]) {
 	// Is this page short?
 	if len(u.page) < depag.perPage {
 		// Got the page count and item count now
-		totPages := u.idx + 1
-		totItems := depag.perPage*u.idx + len(u.page)
+		totPages := u.req.PageIndex + 1
+		totItems := depag.perPage*u.req.PageIndex + len(u.page)
 		if depag.totalPages == 0 || depag.totalPages > totPages {
 			depag.totalPages = totPages
 		}
@@ -238,7 +238,7 @@ func (u itemHandler[T]) applyUpdate(depag *Depaginator[T]) {
 
 		// Cancel pages we no longer need
 		for page, canceler := range depag.cancelers {
-			if page > u.idx {
+			if page > u.req.PageIndex {
 				canceler()
 			}
 		}
@@ -246,7 +246,7 @@ func (u itemHandler[T]) applyUpdate(depag *Depaginator[T]) {
 
 	// Compute the base item index and handle the items
 	depag.wg.Add(1)
-	go u.handle(depag, depag.perPage*u.idx)
+	go u.handle(depag, depag.perPage*u.req.PageIndex)
 }
 
 // handle handles each item in the page.
@@ -254,7 +254,12 @@ func (u itemHandler[T]) handle(depag *Depaginator[T], itemBase int) {
 	defer depag.wg.Done()
 
 	for i, item := range u.page {
-		depag.handler.Handle(depag.ctx, itemBase+i, item)
+		if err := catchPanic0(func() { depag.handler.Handle(depag.ctx, itemBase+i, item) }); err != nil {
+			depag.update(errorSaver[T]{
+				req: u.req,
+				err: err,
+			})
+		}
 	}
 }
 

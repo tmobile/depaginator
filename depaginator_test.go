@@ -179,6 +179,7 @@ func TestDepaginatorDaemonBase(t *testing.T) {
 	u3.AssertExpectations(t)
 	u4.AssertExpectations(t)
 	u5.AssertExpectations(t)
+	assert.Empty(t, obj.errors)
 }
 
 func TestDepaginatorDaemonWithUpdater(t *testing.T) {
@@ -231,6 +232,63 @@ func TestDepaginatorDaemonWithUpdater(t *testing.T) {
 	u3.AssertExpectations(t)
 	u4.AssertExpectations(t)
 	u5.AssertExpectations(t)
+	assert.Empty(t, obj.errors)
+}
+
+func TestDepaginatorDaemonWithUpdaterPanic(t *testing.T) {
+	ctx := context.Background()
+	updater := &mockUpdater{}
+	updater.On("Update", ctx, 20, 0, 0)
+	updater.On("Update", ctx, 20, 4, 0)
+	updater.On("Update", ctx, 20, 4, 5).Panic("update panic")
+	obj := &Depaginator[string]{
+		ctx:     ctx,
+		updater: updater,
+		updates: make(chan update[string], DefaultCapacity),
+		done:    make(chan struct{}),
+	}
+	u1 := &mockUpdate{}
+	u1.On("applyUpdate", obj)
+	obj.updates <- u1
+	u2 := &mockUpdate{}
+	u2.On("applyUpdate", obj).Run(func(args mock.Arguments) {
+		depag := args[0].(*Depaginator[string])
+		depag.totalItems = 20
+	})
+	obj.updates <- u2
+	u3 := &mockUpdate{}
+	u3.On("applyUpdate", obj).Run(func(args mock.Arguments) {
+		depag := args[0].(*Depaginator[string])
+		depag.totalPages = 4
+	})
+	obj.updates <- u3
+	u4 := &mockUpdate{}
+	u4.On("applyUpdate", obj).Run(func(args mock.Arguments) {
+		depag := args[0].(*Depaginator[string])
+		depag.perPage = 5
+	})
+	obj.updates <- u4
+	u5 := &mockUpdate{}
+	u5.On("applyUpdate", obj)
+	obj.updates <- u5
+	close(obj.updates)
+
+	obj.daemon()
+
+	select {
+	case <-obj.done:
+	default:
+		assert.Fail(t, "daemon failed to close channel")
+	}
+	u1.AssertExpectations(t)
+	u2.AssertExpectations(t)
+	u3.AssertExpectations(t)
+	u4.AssertExpectations(t)
+	u5.AssertExpectations(t)
+	require.Len(t, obj.errors, 1)
+	perr, ok := obj.errors[0].(*PanicError)
+	require.True(t, ok)
+	assert.Equal(t, "update panic", perr.Panic)
 }
 
 func TestDepaginatorWaitBase(t *testing.T) {
@@ -320,7 +378,7 @@ func TestDepaginatorGetPageBase(t *testing.T) {
 	assert.Equal(t, 5, updates[0].(cancelerFor[string]).page)
 	assert.Equal(t, withdrawCanceler[string](5), updates[1])
 	assert.Equal(t, itemHandler[string]{
-		idx:  5,
+		req:  req,
 		page: []string{"one", "two", "three"},
 	}, updates[2])
 	assert.Equal(t, pageDone[string]{}, updates[3])
@@ -356,6 +414,41 @@ func TestDepaginatorGetPageError(t *testing.T) {
 		req: req,
 		err: assert.AnError,
 	}, updates[2])
+	assert.Equal(t, pageDone[string]{}, updates[3])
+	pager.AssertExpectations(t)
+}
+
+func TestDepaginatorGetPagePanic(t *testing.T) {
+	ctx := context.Background()
+	pager := &mockPageGetter{}
+	obj := &Depaginator[string]{
+		ctx:     ctx,
+		pager:   pager,
+		updates: make(chan update[string], DefaultCapacity),
+	}
+	req := PageRequest{
+		PageIndex: 5,
+		Request:   "five",
+	}
+	pager.On("GetPage", mock.Anything, obj, req).Panic("test panic")
+
+	obj.getPage(req)
+
+	close(obj.updates)
+	updates := []update[string]{}
+	for u := range obj.updates {
+		updates = append(updates, u)
+	}
+	assert.Len(t, updates, 4)
+	require.IsType(t, cancelerFor[string]{}, updates[0])
+	assert.Equal(t, 5, updates[0].(cancelerFor[string]).page)
+	assert.Equal(t, withdrawCanceler[string](5), updates[1])
+	es, ok := updates[2].(errorSaver[string])
+	require.True(t, ok)
+	assert.Equal(t, req, es.req)
+	perr, ok := es.err.(*PanicError)
+	require.True(t, ok)
+	assert.Equal(t, "test panic", perr.Panic)
 	assert.Equal(t, pageDone[string]{}, updates[3])
 	pager.AssertExpectations(t)
 }
