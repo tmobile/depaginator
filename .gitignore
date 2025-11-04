@@ -3,4 +3,5 @@
 /cover.xml
 /report.xml
 /.gitignore.tmp
+/.golangci.yml.tmp
 /.tools

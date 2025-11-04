@@ -304,7 +304,7 @@ type mockAction struct {
 	mock.Mock
 }
 
-func (m *mockAction) applyAction(lh *ListHandler[string]) { //nolint:unused
+func (m *mockAction) applyAction(lh *ListHandler[string]) {
 	m.Called(lh)
 }
 
@@ -471,5 +471,3 @@ func TestListUpdateApplyActionWithOffsetNoTotal(t *testing.T) {
 	assert.Equal(t, 4, lh.totalPages)
 	assert.Equal(t, 5, lh.perPage)
 }
-
-// XXX TestListUpdateApplyAction

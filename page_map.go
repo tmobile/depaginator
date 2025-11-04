@@ -28,7 +28,7 @@ type pageMap struct {
 // CheckAndSet checks to see if the specific page is set.  It returns
 // true if it is.  Either way, it sets the bit for the specific page.
 func (pm *pageMap) CheckAndSet(page int) (result bool) {
-	idx, bit := bits.Div(0, uint(page), bits.UintSize)
+	idx, bit := bits.Div(0, uint(page), bits.UintSize) //nolint:gosec // Use of int to uint conversion is safe here
 	if idx >= uint(len(pm.bits)) {
 		newMap := make([]uint, idx+1)
 		copy(newMap, pm.bits)

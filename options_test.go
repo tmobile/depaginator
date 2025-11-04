@@ -190,7 +190,7 @@ type mockUpdate struct {
 	mock.Mock
 }
 
-func (m *mockUpdate) applyUpdate(depag *Depaginator[string]) { //nolint:unused
+func (m *mockUpdate) applyUpdate(depag *Depaginator[string]) {
 	m.Called(depag)
 }
 
